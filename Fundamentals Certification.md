@@ -73,7 +73,32 @@
     - *Spark || at 2 levels - a) splitting work at executor & core*
     - Executors have a # of cores/slots & each slot/core can be assigned a task
 
- 
+ - analyzing clikcstream data, transactions, products, users, sales, items
 
-- analyzing clikcstream data, transactions, products, users, sales, items
+## DB Concepts & Demo
 
+- **DB Workspace**: grouping of envm to access DB objects such as clusters, Notebooks, Jobs, Data 
+  - accessible through UI, CLI & REST API
+- Workspace assets:
+  - **Clusters**: set of computational resources and configs where you run your ML/data/adhoc workloads
+    - run through set of comands through notebook or automated job (interactive vs batch)
+    - come in 2 kinds of clusters
+      - All-purpose clusters: analyze data collaboratively using interactive notebooks, can be created via UI, manually created, and shared among many users
+      - Job Clusters: run fast automated jobs - created at runtime and dynamically terminated at the end of the job (cannot restart job cluster)
+  - **Notebook**: web-based UI with group of "cells" that allow you to execute commands (reformatted program)
+    - DB notebooks allow execution in Scala, Python, SQL, R - 
+    - can be exported as DBC files that can be migrated/imported etc
+    - Notebooks are the "sql client" and can be executed interactively
+  - **Job**: construct to house indv execution of a notebook run - either in ad-hoc submission OR batch scheduled run 
+    - can be called through UI, CLI & REST API 
+    - job status can be monitored 
+  - Data **DB Filesystem DBFS**: distr f/s mounted into each DB workspace and is a layer over cloud object store 
+    - contains directories, data, files, etc
+    - auto-populated with sample files 
+    - Files in DBFS are persisted in object store 
+    - through DBFS can configure access controls etc to access data you need without data duplication/migration 
+  - Data **Metastore** : Manages tables and permissions and enables granting of rights/sharing data
+
+  ### Demo
+  - %fs is a dbutils shortcut to the dbutils.fs function
+  - Widgets are like a STP parameter you define and can edit the value and reference throughout the notebook 
