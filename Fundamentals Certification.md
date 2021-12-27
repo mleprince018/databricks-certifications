@@ -99,6 +99,68 @@
     - through DBFS can configure access controls etc to access data you need without data duplication/migration 
   - Data **Metastore** : Manages tables and permissions and enables granting of rights/sharing data
 
-  ### Demo
-  - %fs is a dbutils shortcut to the dbutils.fs function
-  - Widgets are like a STP parameter you define and can edit the value and reference throughout the notebook 
+### Demo
+- %fs is a dbutils shortcut to the dbutils.fs function
+- Widgets are like a STP parameter you define and can edit the value and reference throughout the notebook 
+
+# Spark SQL & DataFrames
+
+## Spark SQL & DataFrame API Intro
+- **Spark SQL** is a module for structured data processing with multiple interfaces: SQL OR Dataframe API allowing use of Python, Scala, Java, R 
+- allows execution of all queries on the same engine, therefore
+  - you can have SQL, python, Scala all coding and able to share/reuse code 
+  - **Query Plans**: ?query program? 
+    - will be optimized automatically before execution 
+  - **RDDs**: ???  step before execution? 
+- **DataFrames**: distributed collection of data goruped into named columns 
+- **Schema**: table metadata of dataframe (col names & types) 
+  - Dataframe **transformations** are methods that return a new dataframe and are *lazily* evaluated (not actually run until later - ?view?)  
+    - {select, where, orderBy...} ?does this include group by?
+  - Dataframe **actions** are methods that trigger computation {count, collect, take,  show...} are *eagerly* evaluated
+
+![Spark SQL vs DataFrame API](./images/SparkSQLvsDataFrameAPI.png)
+
+### Spark Application
+- **SparkSession**: First step of spark application is creating a session 
+  - single entry point to all dataframe API f(x)s
+  - automatically created in DB notebook as var = 'spark'
+  - pyspark.sql in python docs, & is useful to review both scala & python docs because they have different useful info 
+- SparkSessions have the following Methods:
+  - sql: return dataframe result of query 
+  - table: return table as a dataframe 
+  - read: return dataframe reader that can be used to read data in as a dataframe 
+  - range: create dataframe with column containing elements in a range from start to end with step value & # of partitions 
+  - createDataFrame: creates a dataframe from list of tuples - used for testing 
+
+- ? inability to use upcase in where clause in spark sql or dataframe API 
+- ? inability to use spark.sql on a dataframe - needs to pull from a recognized table ? 
+
+## DataSources 
+- CSV can be read in 
+- Apache **Parquet**, columnar storage format that provides efficient stored data - available to all Hadoop ecosystem
+  - allows you to load only cols you need so you don't load EVERYTHING & metadata is written in the footer of the file (sounds like easy corruption? 
+  - doesn't waste space storing misisng values 
+  - predicate filters - pushes filters to the source 
+  - data skipping - stores min/max of each segment so you can skip entire files 
+  - Tamper-resistant: tough to tamper with particular rows because of its storage format 
+  - if working with streaming data, you must define schema first 
+- **Delta Lake**: new tech to be used with spark to build robust data lakes 
+  - runs on top of existing data lake to provide 
+    - stores data in parquet formats
+    - ACID t(x)
+    - scalable metadata
+    - unified streaming/match processing 
+- **DataFrameReader**: can read in data from external storage from a variety of file formats 
+
+    ```spark.read.parquet("/file-system/path/table.parquet")```
+
+- **DataFrameWriter**: accessible through df method write
+
+    ```
+    (df.write 
+        .option("compression")
+        .mode("overwrite")
+        .parquet(outPath)
+    )
+    ```
+- can use this scala command to autogenerate schema info that you can then use as metadata structure ```spark.read.parquet("/file-system/path/table.parquet").schema.toDDL```
