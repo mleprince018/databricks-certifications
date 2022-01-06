@@ -135,7 +135,7 @@
 - ? inability to use upcase in where clause in spark sql or dataframe API 
 - ? inability to use spark.sql on a dataframe - needs to pull from a recognized table ? 
 
-## DataSources 
+## DataSources - simple r/w
 - CSV can be read in 
 - Apache **Parquet**, columnar storage format that provides efficient stored data - available to all Hadoop ecosystem
   - allows you to load only cols you need so you don't load EVERYTHING & metadata is written in the footer of the file (sounds like easy corruption? 
@@ -164,3 +164,53 @@
     )
     ```
 - can use this scala command to autogenerate schema info that you can then use as metadata structure ```spark.read.parquet("/file-system/path/table.parquet").schema.toDDL```
+
+## DataFrames & Columns 
+- entire section is basically last-mile data prep: basic table manipulations to create new calculated variables and subset tables
+- **column**: logical construct that will be computed based on data in dataframe using an expr AKA a *calculated field*
+  - can select/manipulate/remove cols from dataframes, HOWEVER their values cannot be edited as they are *derived*
+  - columns simply represent a value computed on a per-record basis by means of an expression 
+    - can only be transformed within context of a dataframe
+- different ways to reference column depending on language
+  - different ways to create column calculations
+
+#### Transformations & Actions
+- column operators include comparison, basic math, changing type, checking null 
+- these often have a corollary to SQL commands that can be used (orderBy, groupBy, limit, select, distinct, drop...)
+- Actions will execute (show, count, describe, first/head, collect, take...)
+
+### Rows 
+- Methods to work with rows - length, get value of a particular position, field index...
+  - get(i) is primary in scala 
+- can help sort/subset rows...
+
+# Transformations 
+
+## Aggregation 
+- Groupby / Group Data Methods / Agg F(x)s / Math F(x)s
+- **groupBy**: dataframe method that groups dataframe by specified cols so you can run aggregations on them (SQL Group By) 
+  - returns grouped data obj in python 
+  - takes columns: avg, count, max, mean, min, pivot, sum
+- Built-in Functions:
+  - approx_count_distinct, avg, collect_list, corr, max, mean, stddev_samp, sumDistinct, var_pop, ceil, log, round, sqrt 
+
+- I like SQL better - BUT somehow you use dot operators for indv functions
+  - df.groupBy("col-name").sum("numeric") 
+  - you use the agg() to allow you to perform additional dot operator functions 
+  - AAAND Don't forget the IMPORT - if you don't import sum - it won't work properly! LIKE WTF
+  - and you also have to do nesting of function attributes so these dot operators work: look at the sort 
+    - you use the column function to house the attribute so you can use the desc option with it inside of the sort AND then apply the limit. VERY convoluted if you ask me. SQL >>>
+  - and have to use funky withColumns to remake a col and round it. 
+
+
+```
+from pyspark.sql.functions import avg, approx_count_distinct, sum
+chainDF = (df.groupBy("traffic_source").agg(
+      sum("revenue").alias("total_rev"),
+      avg("revenue").alias("avg_rev")
+      )
+      .withColumn("avg_rev", round("avg_rev", 2))
+      .withColumn("total_rev", round("total_rev", 2))
+      .sort(col("total_rev").desc()).limit(3)
+)
+```
