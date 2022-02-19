@@ -13,7 +13,7 @@
 
 # Apache Spark Programming with DataBricks #
 
-## DataBricks Overview ##
+# DataBricks Overview #
 - DB is a unified data analytics platform bringing together DS projects & workflows - ML/analytics/DS in one cloud platform 
   - Addressing these users: data engineers, DS, ML engineers & Data analysts 
   - __ML/Data Science Workspace__ using MLFlow/PyTorch/TensorFlow 
@@ -48,7 +48,7 @@
     - R, SQL, Python, Scala, Java - can all be used for development
     - Generalized execution model/engine 
 
-## Spark Execution 
+# Spark Execution #
   - managing infra is annoying so DB offers managed solution 
   - spark uses clusters of machines to break big task into smaller pieces and distr workload across multiple machines
   - Parallelism (parallel threading) 
@@ -59,7 +59,7 @@
     - **Tasks** are created by driver for each stage and assigned a partition of data to process 
       - they are the smallest units of work 
 
-### Spark Application Walkthrough 
+## Spark Application Walkthrough - DB Training
 ![Spark Application Executor-Core Parallelization](./images/SparkApplication_ExecutorCore.jpg)
 
 - **Driver** : machine where application runs & responsible for 3 things:
@@ -81,7 +81,77 @@
 
  - analyzing clickstream data, transactions, products, users, sales, items
 
-## DB Concepts & Demo
+## Spark Architecture Basics From Analytics Vidhya ##
+- [Understanding Internal Working of Apache Spark](https://www.analyticsvidhya.com/blog/2021/08/understand-the-internal-working-of-apache-spark/)
+- [Data Engineering Basics - Spark Architecture](https://www.analyticsvidhya.com/blog/2020/11/data-engineering-for-beginners-get-acquainted-with-the-spark-architecture/)
+  - OSS distributed big data processing engine for streaming and batch data with || execution & fault tolerance 
+  - APIs in Java, Scala, Python & R 
+    - also integrates with Hadoop ecosystem & able to run in hadoop clusters on hadoop data sources including Cassandra
+  - developed to address drawbacks of Hadoop MapReduce - meaning Apache Spark uses in-memory computation making it MUCH faster 
+  ![Spark Tech Stack](./images/SparkTechStack.png) 
+- **Spark core**: basic functionality of spark - components for task scheduling, memory management, fault recovery, interacting with storage systems... 
+- home to the API that defines resilient distributed datasets (RDD) sparks main programming abstraction 
+- Runtime Libraries
+  - **Spark SQL** spark's package for structured data - allows SQL queries, Hive Query languages and various data sources like Hive tables, JSON & Parquet 
+  - **Spark Streaming** spark component enables processing of live streams of data (logs, queues of messages, etc...)
+  - **MLlib** common ML library with ML algos (Classification, regression, clustering, filtering & model evaluation, etc... ) all these are designed to scale across cluster 
+  - **GraphX** library for manipulating graphs (think social networks...) and performing || graph computation, searching, pathfinding, traversal...
+  - **Cluster Managers** spark designed to efficiently scale from 1 - 1000s of nodes running over variety of cluster managers: 
+    - standalone scheduler: default for simple stuff - reliable and easy to manage resources on app
+    - Hdoop YARN - provided in Hadoop 2: all-purpose cluster manager 
+    - Apache Mesos - general cluster manager that can also run Hadoop MapReduce with Spark & others... 
+    - ?K8s?
+- **Spark RDD**
+  - backbone of Apache Spark does 2 main things: 
+    - (1) Transformations : create a new RDD 
+    - (2) Actions: collect(), count() to return results
+
+### Run-Time Execution Flow ###
+![Spark Execution](./images/SparkApplication_ExecutionFlow.jfif) 
+- Basic flow: A driver program communicates with cluster manager to schedule tasks on worker nodes, once complete they send results back to driver program. 
+
+- (A) Spark submit will create a driver program: **Spark Driver** spark driver first action is to call main method of the program (appears different from "driver" as defined by DB training)
+  - (B1) when executing in spark, you give the main class which is the entry point to your program that is executed by the spark driver 
+  - (C) creates a *spark context/session* that converts a job or RDD lineage into a DAG (directed acyclic graph) which splits the job/RDD lineage into stages and eventually tasks that get sent to the cluster to send to executors
+  - process on a machine responsible for maintainng state of app running on the cluster
+  - runs user code which creates RDD dataframes & data units abstractions 
+    1. converts user program into tasks
+    2. scheduels tasks on executors with the help of the cluster manager
+    3. Maintains state & tasks of executors 
+      - must be network accessible from worker nodes
+- **Spark Cluster Manager** spark execution is agnostic to cluster manager - can use any of available cluster managers, doesn't change behavior - so long as cluster manager can provide executor processes and they communicate - spark doesn't care
+  - (B2) Spark Driver will ask Cluster for worker nodes/executors  
+  - Spark relies on cluster manager to 
+    1. (D) *SCHEDULE & LAUNCH* executors 
+    2. (D) Cluster Manager allocates resources for execution of tasks 
+    - can dynamically increase/decrease executors based on workload data processing to be done 
+    - these often have their own "master/worker" setup - but their terminology is primarily tied to machines rather than processes that spark works on 
+- (E) **Spark Executor** a process running on worker node that runs actual programming logic of data processing in the form of tasks 
+  - they will register themselvesa with driver program before beginning execution - so they can 
+  - a copy of program & config put on all worker nodes so that can be locally read
+  - launched at beginning of spark app & when you submit jobs, they run for lifetime of spark app (holds state)
+    - this can allow isolation on scheduling side (each driver schedules its own tasks) & execution side (tasks from different apps run in different JVMs)
+      - allows for data separation since data cannot be shared unless written to external storage 
+  1. run tasks 
+  2. return results/info on state to driver 
+  2. provides in-memory storage for RDD dataset & dataframes cached by user
+
+![Detailed Spark Execution](./images/SparkApplication_ExecutionFlowDetailed.jfif) 
+
+- *Execution Modes*
+  - Cluster Mode (appears this is DB config - since DB driver schedules tasks across executors)
+    - User submits pre-compiled JAR, Py script or R script to cluster manager
+    - cluster manager launches driver process on worker node in addition to executor processes
+    - cluster manager manages all spark app related stuff 
+    - seems to be most scalable since you can have multi clients submit to the cluster
+  - Client Mode
+    - spark driver remains on client machine that submitted job 
+    - spark driver exists on client machine and cluster manager maintains executor processes
+    - client machines AKA gateway machines or edge nodes 
+  - Local Mode (dev work)
+    - runs spark app on single machine 
+
+## DB Component Concepts
 
 - **DB Workspace**: grouping of envm to access DB objects such as clusters, Notebooks, Jobs, Data 
   - *Interfaces*: accessible through UI, CLI & REST API
@@ -301,6 +371,8 @@ eventsDF.sort(col("user_first_touch_timestamp").desc(), col("event_timestamp"))
 timestamp = 1593878946592107 
 
 from pyspark.sql.types import TimestampType, DateType
+from pyspark.sql.functions import date_format, hour
+
 timestampDF = (df
         .withColumn("timestamp_orig", col("timestamp")) # long or double type that cannot be converted to DateType
         .withColumn("timestamp", (col("timestamp") / 1e6).cast("timestamp")) # division by 1MM converts to 2020 - otherwise its year 2MM or something
@@ -318,8 +390,11 @@ timestampDF.printSchema()
 #  |-- timestamp: timestamp (nullable = true)
 #  |-- timestamp_orig: long (nullable = true)
 #  |-- date_type: date (nullable = true)
+#  |-- date string: string (nullable = true)
+#  |-- time string: string (nullable = true)
+#  |-- HMS_dt: integer (nullable = true)
 ```
-
+  ![Example code listing results for Datetime manipulation](./images/ExampleCode_DateTimeManipulation.png)
 
 from pyspark.sql.functions import avg
 activeDowDF = (activeUsersDF
@@ -335,33 +410,23 @@ activeDowDF = (activeUsersDF
 
 ![Common Aggregation Functions](./images/DF_AggregateFunctions.png)
 
+```
+ |-- items: array (nullable = true)
+ |    |-- element: struct (containsNull = true)
+ |    |    |-- coupon: string (nullable = true)
+ |    |    |-- item_id: string (nullable = true)
+
+detailsDF = (df.withColumn("items", explode("items")) # example selected by class is lame, but you get the idea...
+# input to function explode() should be array or map type, not struct 
+
+ |-- items: struct (nullable = true)
+ |    |-- coupon: string (nullable = true)
+ |    |-- item_id: string (nullable = true)
+```
 
 # Other Notes #
 - Various blog articles from [Analytics Vidhya](https://www.analyticsvidhya.com/blog/2021/08/understanding-the-basics-of-apache-spark-rdd/) 
+
 ## Apache Spark RDD ## 
 - Various blog articles from [Analytics Vidhya](https://www.analyticsvidhya.com/blog/2021/08/understanding-the-basics-of-apache-spark-rdd/) 
 
-## Spark Architecture Basics ## 
-- [Understanding Internal Working of Apache Spark](https://www.analyticsvidhya.com/blog/2021/08/understand-the-internal-working-of-apache-spark/)
-  - OSS distributed big data processing engine for streaming and batch data with || execution & fault tolerance 
-  - APIs in Java, Scala, Python & R 
-    - also integrates with Hadoop ecosystem & able to run in hadoop clusters on hadoop data sources including Cassandra
-  - developed to address drawbacks of Hadoop MapReduce - meaning Apache Spark uses in-memory computation making it MUCH faster 
-  ![Spark Tech Stack](./images/SparkTechStack.png) 
-- **Spark core**: basic functionality of spark - components for task scheduling, memory management, fault recovery, interacting with storage systems... 
-- home to the API that defines resilient distributed datasets (RDD) sparks main programming abstraction 
-- Runtime Libraries
-  - **Spark SQL** spark's package for structured data - allows SQL queries, Hive Query languages and various data sources like Hive tables, JSON & Parquet 
-  - **Spark Streaming** spark component enables processing of live streams of data (logs, queues of messages, etc...)
-  - **MLlib** common ML library with ML algos (Classification, regression, clustering, filtering & model evaluation, etc... ) all these are designed to scale across cluster 
-  - **GraphX** library for manipulating graphs (think social networks...) and performing || graph computation, searching, pathfinding, traversal...
-  - **Cluster Managers** spark designed to efficiently scale from 1 - 1000s of nodes running over variety of cluster managers: 
-    - standalone scheduler: default for simple stuff - reliable and easy to manage resources on app
-    - Hdoop YARN - provided in Hadoop 2: all-purpose cluster manager 
-    - Apache Mesos - general cluster manager that can also run Hadoop MapReduce with Spark & others... 
-- **Spark RDD**
-  - backbone of Apache Spark does 2 main things: 
-    - (1) Transformations : create a new RDD 
-    - (2) Actions: collect(), count() to return results
-
-![Spark Execution](./images/SparkApplication_Execution.jpg) 
