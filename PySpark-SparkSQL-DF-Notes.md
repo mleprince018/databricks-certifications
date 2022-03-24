@@ -1,9 +1,10 @@
 # Spark SQL & DataFrames
-
+??? check distinct() - can it contain stuff in it? or just dot operator? 
 ### DBUTILS
 - %fs is a dbutils shortcut to the dbutils.fs function
 - Widgets are like a STP parameter you define and can edit the value and reference throughout the notebook 
-    ```
+
+```
     %sql 
     CREATE WIDGET TEXT state DEFAULT "CA"
     SELECT
@@ -15,41 +16,7 @@
     %python
     dbutils.widgets.multiselect("colors", "orange", ["red", "orange", "black", "blue"], "Traffic Sources")
     colors = dbutils.widgets.get("colors").split(",")
-      ```
-
-## Spark SQL & DataFrame API Intro
-![Spark SQL Feeding Query Plan](./images/SparkSQL_QueryPlan.png)
-- **Spark SQL** is a module for structured data processing with multiple interfaces: SQL OR Dataframe API: allowing use of Python, Scala, Java, R 
-- **Query Engine**: converts execution of all queries so they can run on the same engine, therefore
-  - you can have SQL, python, Scala all coding and able to share/reuse code 
-  - **Query Plans**: ?query program? 
-    - the translated query 
-    - With databricks & Spark, it can optimize the query plan automatically before execution 
-  - **RDDs**: Resilient Distr dataset (low level representation of datasets) 
-    - spark converts our commands into RDD so we don't have to code in it
-
-- **DataFrames**: distributed collection of data grouped into named columns 
-- **Schema**: table metadata of dataframe (col names & types) 
-  - Dataframe **transformations** are methods that return a new dataframe and are *lazily* evaluated (not actually run until later - ?view?)  
-    - {select, where, orderBy, groupBy...} - creates a plan (~ to a view)
-  - Dataframe **actions** are methods that trigger computation {count, collect, take, describe, summary, first/head, show...} are *eagerly* evaluated
-
-## Stages of Query Optimization
-![Spark Query Optimizer](./images/SparkExecution_CatalystOptimizer.png)
-- When you submit a query to Spark it goes through various stages before it is executed
-  - doesn't matter whether query from SQL, scala or python - if you go through the API it goes through this
-  1. Unresolved Logical Plan: Query is parsed - tablenames, etc are not resolved 
-  2. Analysis through Metadata Catalog: tablenames, columns are validated against catalog
-  3. Logical plan: Valid query 
-  4. Logical Optimization through Catalyst Catalog: First set of optimizations, rewrite/reorder, dedup...
-  5. Optimized Logical Plan: generated from catalyst catalog optimization
-  6. Physical Plans: Catalyst optimizer determines how/when to optimize  and generates 1+ physical plan(s) 
-    - different from optimized, because optimization has been applied 
-  7. Each optimization applied leads to a different cost-based plan which is put through a cost model
-  8. Most optimal physical plan is selected and compiled to RDDs for execution 
-- Adaptive Query Execution (AQE) in Spark 3.0+
-  - disabled by default, recommended to enable - provides runtime stats plugged into logical plan 
-  - can dynamically re-optimize queries like: switching join strategies, coalesce shuffle partitions
+```
 
 ```
 df = spark.read.parquet(eventsPath)
@@ -75,12 +42,15 @@ Pull from parquet file using filter
 - `spark.sparkContext.defaultParallelism` will return # of cores in cluster 
   - local mode has cores on local machine - Mesos etc, has min of 2 or cores on machine...
 - Num of partitions of data `df.rdd.getNumPartitions()`
+
 - **coalesce()** - narrow transformation: no shuffling, doesn't increase partitions
   - returns new DF with exactly N partitions (decrease number of partitions from current #, to N)
     - cannot coalesce to # greater than current # of partitions
     - cannot guarantee equal partition sizes
+    - used to reduce partitions w/o shuffle
 - **repartition()** - wide transformation: reshuffles ALL data, *evenly* balances partition sizes
-  - returns new DF with exactly N partitions uniformly distributed - used to repartition to MORE partitions or EVEN out
+  - returns new DF with exactly N partitions uniformly distributed - used to repartition to MORE partitions or EVEN out by shuffling data
+    - if you try and repartiton on a col - it will automatically default to `spark.sql.shuffle.partitions` which = 200 by default. 
 - General rule - when partitioning, # of partitions to = # of cores - or at least a MULTIPLE of the # of cores
   - each partition, when cached is ~ 200 MB is considered optimal based on real-world exp 
 - If i read data in with 10 partitions - do I decrease to 8 partitions? or increase to 16? 
@@ -101,8 +71,34 @@ Pull from parquet file using filter
 ```
 groupdf.rdd.getNumPartitions() = returns # of partitions
 coalesceDF = groupdf.coalesce(6)
-repartDF = groupdf.repartition(8)
+repartDF = groupdf.repartition(8)  ## can repratition to lower number of partitions, will reshuffle to create equal sized partitions
 repartDF.rdd.getNumPartitions()  ==>> returns 8 
+
+(df.write.format("parquet")
+  .repartition(13)
+  .partitionBy("src")       ## can partition by a col 
+  .option("path", "/user/mapr/data/flights")
+  .saveAsTable("flights"))
+
+  df.write.format("parquet")
+.sortBy("id")
+.partitionBy("src")
+.bucketBy(4,"dst","carrier")
+.option("path", "/user/mapr/data/flightsbkdc")
+.saveAsTable("flightsbkdc")
+```
+### Cache & Loading DF to memory 
+- cache & persist both offer ways to store intermediate df results to be reused in subsequent results 
+- `df.cache() == df.persist(StorageLevel.MEMORY_AND_DISK)` is MEMORY_AND_DISK meaning that partitions that do not fit into memory are stored on disk 
+  - is a lazy operation - not cached until you take an action 
+  - `sampleRDD.cache()` will cache an RDD into memory by default 
+  - use `df.unpersist()` to manually remove from memory 
+- `MEMORY_ONLY` – This is the default behavior of the RDD cache() method and stores the RDD or DataFrame as deserialized objects to JVM memory. When there is no enough memory available it will not save DataFrame of some partitions and these will be re-computed as and when required. This takes more memory. but unlike RDD, this would be slower than MEMORY_AND_DISK level as it recomputes the unsaved partitions and recomputing the in-memory columnar representation of the underlying table is expensive
+- `MEMORY_AND_DISK_2` can duplicate data on multiple nodes - to make data more fault resistant by having copies that can be used immediately should failure occur
+```
+# Below will fit all partitions it can into memory, and only recompute partitions when needed
+from pyspark import StorageLevel
+transactionsDF.persist(StorageLevel.MEMORY_ONLY)  
 ```
 
 ## SparkSession 
@@ -145,25 +141,95 @@ repartDF.rdd.getNumPartitions()  ==>> returns 8
     - data versioning
     - schema enforcement & evolution 
     - Ingestion tables (bronze) -> refined tables (silver) -> feature/agg data store (gold)
-- **DataFrameReader**: can read in data from external storage from a variety of file formats 
 
-    ```
-    newDF = (spark.read.csv("/filesystempath/table.csv", sep="\t", header=True, inferSchema=True))
-    # Notice .schema is before the .<filetype parquet> - if you put it after, it throws an error. Needs to "load" schema before picking up parquet file 
-    newDF = spark.read.schema(predefinedSchema).parquet("/file-system/path/table.parquet")
-    ```
+### **DataFrameReader**: can read in data from external storage from a variety of file formats 
+[SparkByExamples - Read into DF](https://sparkbyexamples.com/pyspark/pyspark-read-csv-file-into-dataframe/)
+```
+BASIC EXAMPLE:
+newDF = (spark.read.csv("/filesystempath/table.csv", sep="\t", header=True, inferSchema=True))
+# Notice .schema is before the .<filetype parquet> - if you put it after, it throws an error. Needs to "load" schema before picking up parquet file 
+newDF = spark.read.schema(predefinedSchema).parquet("/file-system/path/table.parquet")
+```
+- **Build-up of read Example**
 
-- **DataFrameWriter**: accessible through df method write
+```
+EXAMPLE ONE:
+Given a csv file with: 'user_id\tuser_first_touch_timestamp\temail\nUA000000102357305\t1592182691348767\t""\nUA000000102357308\t1592183287634953\t""\n
+newDF = (spark.read.csv("/mnt/training/ecommerce/users/users-500k.csv") )
+display(newDF)
+newDF.printSchema()
+```
+- csv only - tries to read in using default delimiters - so entire row read into single column as a string
+- csv delimiter - reads everything into string cols starting with the first line - see it as row one, no names for columns
+- csv schema - without delimiter, everythign goes into first string col - others remain empty 
+- csv schema delimiter - reads everything into schema, and note that colnames are there now - but header still takes up first line. Is null on first line because "user_first_touch_timestamp" is not a LONG type
+- **TIP**
+  - can use this *%scala* command to autogenerate schema info from *parquet* files that you can then use as metadata structure ```spark.read.parquet("/file-system/path/table.parquet").schema.toDDL``` 
+  - by pre-defining the metadata structure, it allows you to read in files ~10x faster on community DB
 
-    ```
+
+![spark.read CSV only](./images/spark-read_1csv.png)
+![spark.read CSV Delimiter](./images/spark-read_2csv-delim.png)
+![spark.read CSV Schema](./images/spark-read_2csv-schema.png)
+![spark.read CSV Delimiter & Schema](./images/spark-read_3csv-delim-schema.png)
+
+```
+newDF = (spark.read
+         .option("delimiter", '\t') # OPTION is a key/value thing: option name and value
+         .option("header", True)
+         .schema(userDefinedSchema)
+         .csv("/mnt/training/ecommerce/users/users-500k.csv")
+        )
+display(newDF)
+newDF.printSchema()
+=== EQUIVALENT TO ===
+newDF2 = (spark.read
+          .options(delimiter='\t', header=True)  # OPTION*S* IS DIFFERENT FROM OPTION
+          .schema(userDefinedSchema) 
+          .csv(usersCsvPath)
+          .where("user_first_touch_timestamp >= 1592186122660210")  # where/filter MUST be at the end, because you can only filter AFTER you specify data
+)
+
+spark.read.schema(fileSchema).format("parquet").load(filePath)
+```
+![spark.read CSV Delimiter, Header & Schema](./images/spark-read_4csv-delim-header-schema.png)
+
+### **DataFrameWriter**: accessible through df method write
+[SparkByExamples spark.write csv](https://sparkbyexamples.com/spark/spark-write-dataframe-to-csv-file/)
+```
     (df.write 
         .option("compression","snappy")
         .mode("overwrite")
         .parquet(outPath)
     )
-    ```
-- can use this *%scala* command to autogenerate schema info from *parquet* files that you can then use as metadata structure ```spark.read.parquet("/file-system/path/table.parquet").schema.toDDL``` 
-- by pre-defining the metadata structure, it allows you to read in files ~10x faster on community DB
+
+    usersDF2p = usersDF.coalesce(2)  # set so that only 2 partitions for this dataset
+    (usersDF2p.write
+      .option('delimiter', ':')
+      .option("header", True)
+      .option("compression", "gzip")
+      .mode("overwrite")
+      .csv("/user/marc.leprince@erigo-c.com/spark_programming/1_4_reader_writer/csv2")
+    )
+    display(dbutils.fs.ls("/user/marc.leprince@erigo-c.com/spark_programming/1_4_reader_writer/csv2"))
+
+### Write a csv file in one big file where nulls are 'n/a'
+    transactionsDf
+      .repartition(1)
+      .write.option("sep", "\t")
+      .option("nullValue", "n/a")
+      .csv(csvPath)
+```
+- **Saving Mode Types**
+  - overwrite – mode is used to overwrite the existing file.
+  - append – To add the data to the existing file.
+  - ignore – Ignores write operation when the file already exists.
+  - error – This is a default option when the file already exists, it returns an error.
+
+- will write out however many partitions there are into your specified directory 
+  - has some start/committed files there too
+
+![spark.write csv with various options](./images/spark-write_1csv.png)
 
 ## DataFrames & Columns 
 - entire section is basically last-mile data prep: basic table manipulations to create new calculated variables and subset tables
@@ -173,6 +239,7 @@ repartDF.rdd.getNumPartitions()  ==>> returns 8
     - can only be transformed within context of a dataframe
 - different ways to reference column depending on language
   - different ways to create column calculations
+- To rename columns: `.withColumnRenamed("ExistingColName", "NewColName")`
 
 # Transformations 
 
@@ -182,14 +249,34 @@ repartDF.rdd.getNumPartitions()  ==>> returns 8
 - these often have a corollary to SQL commands that can be used (orderBy, groupBy, limit, select, distinct, drop...)
 - Actions will execute (show, count, describe, first/head, collect, take...)
 
+- `df.collect()` retrieves all elements in a df as an array of Row type to the driver node yielding the result: 
+```
+[Row(dept_name='Finance', dept_id=10), 
+Row(dept_name='Marketing', dept_id=20), 
+Row(dept_name='Sales', dept_id=30), 
+
+# Returns value of First Row, First Column which is "Finance"
+deptDF.collect()[0][0]
+# returns the first element in an array (1st row)
+deptDF.collect()[0]
+```
+- Usually, collect() is used to retrieve the action output when you have very small result set and calling collect() on an RDD/DataFrame with a bigger result set causes out of memory as it returns the entire dataset (from all workers) to the driver hence we should avoid calling collect() on a larger dataset.
+
+- `take(n: Int) == head(n: Int)` Take the first num elements of the RDD.
+
 ### Rows 
 - Methods to work with rows - length, get value of a particular position, field index...
   - get(i) is primary in scala 
 - can help sort/subset rows...
   - `newDF = DF.limit(###)` works like obs in SAS - limiting # of rows read in and save to new DF
-  - `purchasesDF.select("event_name","second_col").distinct()` the easiest way to make certain items
+  - `purchasesDF.select("event_name","second_col").distinct()` the easiest way to make a unique set of *columns selected* 
+    - works like SQL distinct 
+  - `df.dropDuplicates(['col1', 'col2']).select("event_name","second_col")` is equivalent to the distinct above - but it doesn't drop other columns unless you specify 
+    - takes an array of col values 
+    - with no col name - it will remove duplicate rows from a df
 - `where | filter` are the same in pySpark 
 `revenueDF = eventsDF.filter(col("ecommerce.purchase_revenue_in_usd").isNotNull())`
+
 ![Common DataFrame Row Action Methods](./images/DF_RowActionMethods.png)
 
 
@@ -223,16 +310,31 @@ chainDF = (df.groupBy("traffic_source", "device").agg(
       )
       .withColumn("avg_rev", round("avg_rev", 2))
       .withColumn("total_rev", round("total_rev", 2))
-      .sort(col("total_rev").desc())
+      .sort(col("total_rev").desc())  # automatically puts nulls at the bottom ==  .sort(col("total_rev"), ascending=False)
       .limit(3)
 )
+# BUT if you sort ascending - nulls automatically go to the top - can use below to put nulls at the bottom - desc_nulls_last also works
+.sort(asc_nulls_last(col("avg_purchase_revenue")))
 
 # sort by 2 columns - user timestamp desc and event timestamp
 eventsDF.sort(col("user_first_touch_timestamp").desc(), col("event_timestamp"))
+
+#are all ascending 
+- transactionsDf.sort(col("value"))
+- transactionsDf.sort(asc(col("value")))
+- transactionsDf.sort(asc("value"))
+- transactionsDf.sort(transactionsDf.value.asc())
+- transactionsDf.sort(transactionsDf.value)
 ```
 - another option found through stackoverflow: You can try to use 'from pyspark.sql.functions import *' This method may lead to namespace coverage, such as pyspark 'sum' function covering python built-in 'sum' function.
 - Another insurance method: `import pyspark.sql.functions as F`, use method: `F.sum`.
 
+```
+# Compound conditions
+(col("storeId").between(20, 30)) & (col("productId")==2) 
+# .between() is a valid function that resolves to ((storeId >= 20) AND (storeId <= 30))
+# '| &' is how you chain the two booleans - 'and &&' do NOT work
+```
 
 ## Date Manipulation
 - [Datetime patterns](https://spark.apache.org/docs/latest/sql-ref-datetime-pattern.html) 
@@ -324,6 +426,26 @@ mattressDF = (detailsDF.filter(array_contains(col("details"), "Mattress")) # use
   .withColumn("size", element_at(col("details"), 2)) # explode will create new rows - withColumn for each element in an array to create columns from array elements - note that it is 1,2,3 position and NOT 0,1,2
   .withColumn("quality", element_at(col("details"), 1))
 )
+### Split examples - will default to breaking apart a string into an array based on the delimiter ~ data to columns in excel 
+df4 = spark.createDataFrame([('oneAtwoBthree',)], ['str',])
+df4.select(split(df4.str, '[AB]').alias('str')).show()
++-----------------+
+|              str|
++-----------------+
+|[one, two, three]|
++-----------------+
+##### Split can also be provided a numerical parameter that specifies the number of resulting array items you want (2 means you want 2 items in your target array)
+df4.select(split(df4.str, '[AB]',2).alias('str')).show()
++----------------+
+|             str|
++----------------+
+|[one, twoBthree]|
++----------------+
+
+  ('Jen','Mary','Brown','1980-02-17')
+  df1 = df.withColumn('year', split(df['dob'], '-').getItem(0)) \
+       .withColumn('month', split(df['dob'], '-').getItem(1)) \
+       .withColumn('day', split(df['dob'], '-').getItem(2))
 
 ### Use groupBy AND agg(collect_set(...)) to group string values into arrays for each unique row
     # collect_set will de-dup and present unique set - whereas collect_list will collect all elements
@@ -342,13 +464,15 @@ email | size    ->  email | size_collectset | size_collectlist
 - **lit()**: creates a column of literal value
 - **isnull()**: returns boolean of true if column is null 
 - **rand()**: generates random col with indp & identically distributed samples uniformly distributed in [0.0,1.0)
-- **dropna()**: omitting rows with any/all or specified # of null values for all/subset of cols
+- **dropna()**: omitting rows with any/all or specified # of null values for all/subset of cols 
+  - `transactionsDf.dropna(thresh=4)` will ensure that a row has at least 4 non-null values per row and drop all others
+  - if you had a 6 col df, and want to remove all missing data with 3 nulls, you want at least 4 valid values, so threshold = 4
 - **fill()** replace null values with specified value for all/subset of cols 
   - invoked by `.na.fill('value to put in column',"colName")` and can chain together to do 1 col by 1 col
   - OR JSON array `.na.fill({"city-colname1": "unknown", "type-colname2": ""})`
 - **replace()**: returns new df replacing a value with another value
 
-## in this course they TOTALLY skip how to do joins - are you kidding me??? 
+## in this DB course they TOTALLY skip how to do joins - are you kidding me??? 
 https://sparkbyexamples.com/pyspark/pyspark-join-explained-with-examples/ 
 
 ```
@@ -364,6 +488,9 @@ conversionsDF = (usersDF.join(convertedUsersDF, usersDF.email == convertedUsersD
 conversionsDF = (usersDF.join(convertedUsersDF,"email","outer")
     does an automatic coalesce? - seems only way to coalesce otherwise is prior rename of cols
 
+### Broadcast join - where you use broadcast(df) to send the smaller DF to all executors to be merged with the larger dataset 
+from pyspark.sql.functions import broadcast
+itemsDf.join(broadcast(transactionsDf), itemsDf.itemId == transactionsDf.storeId).show()
 
     .na.fill('False',"converted")    # Is == to more specific .na.fill(value='False',subset=["converted"] )
                   
@@ -373,6 +500,8 @@ abandonedCartsDF = (emailCartsDF.filter(col("converted") == 'False')
                     .filter(col("cart").isNotNull())   )
 ===
 abandonedCartsDF2 = (emailCartsDF.filter( "converted = 'False' and cart IS NOT NULL" ) )
+df.filter(df.state != "OH") == df.filter(~(df.state == "OH")) == df.filter(col("state") != "OH")
+# THIS DOES NOT WORK: df.filter("device" != 'macOS') - because it expects the entire thing to be a SQL string query 
 ```
 
 ## User Defined Functions (UDFs)
@@ -383,130 +512,47 @@ abandonedCartsDF2 = (emailCartsDF.filter( "converted = 'False' and cart IS NOT N
     - row data is deserialized from spark's native binary format to pass to UDF, then results serialized back into spark's native binary format
   - overhead from python interpreter & on executors running the UDF
 - pandas/vectorized UDFs use apache arrow to speed up exec - in test envnm - run about the same
-
-# Stream Processing
-## Stream Processing 
-- Reading through the [online guide](https://spark.apache.org/docs/latest/structured-streaming-programming-guide.html) might be better than online video
-- **stream processing**: act of continuously incorporating new data to a query result
-  - input data is unbounded: no predetermined beginning/end
-  - data forms series of events from a processing system (IoT sensory data, CC T(x), etc)
-  - calc into hourly results, etc and keep up to date 
-- **Batch processing**: runs on fixed input dataset - and will only compute ONCE 
-- Need ability to get consistent results when querying in batch or streaming, therefore structured streaming 
-  - Continuous Applications: streaming, batch, interactive all working on same data to deliver same product 
-- Stream processing use-cases:
-  - Notification/Alerting
-  - RT Reporting
-  - Incremental ETL: reduce latency for ETL for efficient queries, can get new data much faster 
-  - RT data updates
-  - RT decision Making - new business inputs lead to business logic decisions 
-  - Online ML - most complex because requires joins, ML lib, etc
-- Batch vs Streaming 
-  - batch is easier to understand, troubleshoot, etc & higher throughput
-  - streaming allows lower latency for fast responsetimes, efficient updates & automatic bookkeeping on new data 
-    - streaming system can remember state from prior calc and adjust metrics on arrival of new data 
-- **Streaming Methodologies**
-  - Continuous Processing 
-    - each node in the system, it is listening to updates from other nodes and passing results to child nodes 
-    - Advantages: lowest possible latency with each node responding to message
-    - Cons: low throughput - because of high overhead per record (contacting OS to send a packet)
-      - generally have static deployments that cannot be updated without restarts -> load balancing
-  - Micro Batch Processing
-    - wait a certain trigger interval to accumulate data before executing batch in parallel, on a cluster behind the scenes
-    - can get high throughput through batch processing (sending all at once, rather than one at a time) 
-      - means they have comparatively less overhead, and in general require fewer nodes compared to Cont' Processing 
-      - can use dynamic LB techniques to update/lower ?tasks? 
-    - Cons: higher base latency because of trigger interval
-    - when data coming too fast to be consumed continuously 
-- Spark has done micro-batch processing because throughput was required 
-  - in structured streaming, continuous processing is under dev
-- when deciding cont vs micro-batch:
-  - Look at latency requirements - micro batch latency ~ 100ms - 1s
-  - TCO: Total Cost of Operation - lower # of nodes and admin overhead on cluster mgt etc
-- Processing Micro-batch
-  - Goal is to process ALL data arrived for each interval in under the amount of time the following interval processing begins 
-  - Losing Data:
-    - if you process data from a TCP/IP stream every 10 seconds and it takes 15 seconds to process, you will lose 5 seconds of the following interval of data 
-    - depending on what you are analyzing, the data loss could be negligible or a big deal 
-    - if you process from a pub/sub system, you simply fall behind in processing data. 
-      - if delayed long enouhg, pub/sub will run into limits of holding data 
-      - should add cluster nodes to stay current 
-- Spark treats micro batches as continuous updates new rows appended to an unbound table 
-  - dev generates a query on the table AS-IF it were static 
-  - computation on input table is then pushed to results table 
-    - results table is written to an output sink 
-- Structured Streaming: treat a live datastream as a table that is cont' appended ~ batch processing
-  - batch queries are simply run as micro queries on appended rows to your stream AKA unbounded table 
-    - queries remain the same whether running in batch or streaming 
-  - data items that stream in are ~ to new rows in a table 
-    - the streaming query job will process new data incrementally, and update state as needed and update results 
-    - run in fault tolerant fashion... 
-  - afterwards results are updated into a result table which go into a sink
-
-![Structured Streaming Query Standard](./images/StrucStreaming_PyQuery.png)
-
-![Structured Streaming Example](./images/structured-streaming-example-model.png)
-
-- Streaming data issues that batch doesn't deal with: Event time, out of order data
-  - therefore stuctured streaming does have certain query limitations & new concepts 
-- Structured Streaming + Apache Spark Batch, etc = Continuous Application
-  - end-to-end app that reacts to data in RT combining all these tools
-- **Supported input sources for streaming**
-  - Apache Kafka, Files from distr system - HDFS/S3, socket source for testing, stable source APIs for streaming connections 
-  - file source, kafka, socket source & rate source
+!!! review how to register UDFs - syntax and usage !!!
 ```
-Starting Streaming Queries
-Once you have defined the final result DataFrame/Dataset, all that is left is for you to start the streaming computation. To do that, you have to use the DataStreamWriter (Scala/Java/Python docs) returned through Dataset.writeStream(). You will have to specify one or more of the following in this interface.
+def firstLetterFunction(email):  # defining function
+  return email[0]
+firstLetterUDF = udf(firstLetterFunction)  # serializes f(x) to be sent to executors so it can now be used on dataframes
+from pyspark.sql.functions import col
+display(salesDF.select(firstLetterUDF(col("email")))) # applied to col
 
-Details of the output sink: Data format, location, etc.
+# to use in SQL - need to use this registration
+spark.udf.register("sql_udf", firstLetterFunction)
+spark.udf.register('power_5_udf', pow_5, T.LongType())
+%sql
+SELECT sql_udf(email) AS firstLetter FROM sales 
 
-Output mode: Specify what gets written to the output sink.
+# Vectorized UDFs - with pandas 
+from pyspark.sql.functions import pandas_udf
+vectorizedUDF = pandas_udf(lambda s: s.str[0], "string")  
+display(salesDF.select(vectorizedUDF(col("email"))))
 
-Query name: Optionally, specify a unique name of the query for identification.
-
-Trigger interval: Optionally, specify the trigger interval. If it is not specified, the system will check for availability of new data as soon as the previous processing has been completed. If a trigger time is missed because the previous processing has not been completed, then the system will trigger processing immediately.
-
-Checkpoint location: For some output sinks where the end-to-end fault-tolerance can be guaranteed, specify the location where the system will write all the checkpoint information. This should be a directory in an HDFS-compatible fault-tolerant file system. The semantics of checkpointing is discussed in more detail in the next section.
 ```
-- **Supported output sinks for streaming**: define *what* data to write out
-  - file format - dumps to parquet, csv, JSON...
-  - Kafka - writes to 1+ topics in Kafka
-  - console - prints to stdout (generally for debugging)
-  - memory - updates in-mem table that can be queried through SQL or dataframe API
-  - Foreach - escape hatch - write your own kind of sink
-  - Delta - DB proprietary sink
-- What are sinks? specify destination for result set of a stream, 
-  - sinks + execution engine, help track process of data processing 
-  - **Output modes**: define *how* data is output  
-    - *certain queries/sinks may only support certain output modes*
-      - I.E. gathering all data - don't use complete, use append. If you are groupby agg, complete/update work, but not append
-    - *complete*: entire updated output result table is written to the sink (sink implementation decides how to write entire table)
-    - *append*: only new records appended to result table since last trigger are written to sink
-    - *update*: only new records updated since last trigger will be output to sink
-- **Trigger Types**: *when* data is output - when structured streaming should check for new input data and update results
-  - *Default*: process each micro-batch as soon as previous one has been processed - in general the fasted
-    - if you have a file sink - can mean you write tons of small files on fs
-  - *Fixed Interval*: time-based where micro-batch is kicked off at pre-defined intervals
-  - *One-Time*: process all available data as a single micro-batch and then stop query
-  - *Continuous Processing*: Long-running tasks that continuously read, process and write data as soon as events available (experimental)
-- Fault Tolerance:
-  - if a failure occurs, streaming engine attempts to restart and/or reprocess data - can only do that if streaming source is replayable
-    - assumes data source has kinesis sequence numbers, kafka offsets... 
-  - End to end fault tolerance which is guaranteed by: 
-    - checkpointing & write-ahead logs: to record offset range of data being processed during each interval
-      - appears to store state in case data is lost
-    - idempotent sinks: generate same written data for a given input, whether 1 or multiple writes are performed - even if node fails during write & can overwrite based on offsets
-    - replayable data sources
-  - these guarantee end-to-end exactly once semantics under any failure condition 
-- Streaming Query Operations:
-  - stop stream
-  - await termination
-  - status, isActive
-  - recent progress,
-  - Metadata: name, ID, runID...
-![Structured Streaming Query Example](./images/StrucStreaming_PyQuery2.png) 
+```
+find_most_freq_letter_udf = udf(find_most_freq_letter)
+itemsDf.withColumn("most_frequent_letter", find_most_freq_letter_udf("itemName"))
+```
+- Spark should use the previously registered find_most_freq_letter_udf method here – but it is not doing that in the original codeblock. There, it just uses the non-UDF version of the Python method.
 
-## Streming Processing Lab ##
-```
-  .withColumn("mobile", col("device").isin(["iOS", "Android"]))
-```
+- Note that typically, we would have to specify a return type for udf(). Except in this case, since the default return type for udf() is a string which is what we are expecting here. If we wanted to return an integer variable instead, we would have to register the Python function as UDF using find_most_freq_letter_udf = udf(find_most_freq_letter, IntegerType()).
+
+### Sample
+
+Answering this question correctly depends on whether you understand the arguments to the DataFrame.sample() method (link to the documentation below). The arguments are as follows: `DataFrame.sample(withReplacement=None, fraction=None, seed=None)`.
+
+The first argument withReplacement specified whether a row can be drawn from the DataFrame multiple times. By default, this option is disabled in Spark. But we have to enable it here, since the question asks for a row being able to appear more than once. So, we need to pass True for this argument.
+
+About replacement: "Replacement" is easiest explained with the example of removing random items from a box. When you remove those "with replacement" it means that after you have taken an item out of the box, you put it back inside. So, essentially, if you would randomly take 10 items out of a box with 100 items, there is a chance you take the same item twice or more times. "Without replacement" means that you would not put the item back into the box after removing it. So, every time you remove an item from the box, there is one less item in the box and you can never take the same item twice.
+
+The second argument to the withReplacement method is fraction. This referes to the fraction of items that should be returned. In the question we are asked for 150 out of 1000 items – a fraction of 0.15.
+
+The last argument is a random seed. A random seed makes a randomized processed repeatable. This means that if you would re-run the same sample() operation with the same random seed, you would get the same rows returned from the sample() command. There is no behavior around the random seed specified in the question. The varying random seeds are only there to confuse you!
+
+- in pyspark `col("column").contains('<string>')` is meant to see if a certain string exists in a particular column 
+  - for example if ab exists in abs
+- `col("column").isin("Bob","Mike")` is for checking if a list of elements matches a column value
+  - if Bob or Mike exists in the column name for example 
