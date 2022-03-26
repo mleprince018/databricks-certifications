@@ -30,6 +30,8 @@
         - read/write dataframes to/from disk
         - work with UDFs and SparkSQL functions
 
+practice exam: https://files.training.databricks.com/assessments/practice-exams/PracticeExam-DCADAS3-Python.pdf
+
 ## Personal notes
 - areas to restudy:
     - DF API

@@ -91,7 +91,8 @@
 
 - **Fault Tolerance** : achieved primarily through 2 items below:
   1. Between transformations, DataFrames are *immutable*
-  2. since spark records lineage - spark can reproduce any DF in case of failure
+  2. since spark records lineage - spark can reproduce any DF in case of failure 
+  - In client/cluster mode considered fault tolerant even if your single worker node goes down - because spark driver can restart work? 
 
 
 ## Spark Logical Components ## 
@@ -112,8 +113,9 @@
 - **Executors** JVM processes that: accept tasks from the driver, execute those tasks and return results to the driver 
 - Use **slots** (interchangeable with CPU cores or threads) for running tasks in parallel 
 
-- *Execution Modes* - Tying Logical Components to Physical Arch 
+- *Execution Modes* - Tying Logical Components to Physical Arch - where the driver/executors are physically located
   - in cluster/client the cluster manager is SEPARATE machine from client/driver
+
 ![Spark Logical Components in Cluster Mode ](./images/Spark_runtimeArch_01.png) 
 - Cluster Mode (this is DB config - since DB driver schedules tasks across executors)
   - User submits pre-compiled JAR, Py script or R script to cluster manager
@@ -212,6 +214,7 @@
 >>    - driver needs to submit a job to that slot 
 >>    - as tasks run, they share executor resources and they share same JVM heap space as others
 >>      - meaning a rogue task can bring down an executor 
+>>      - possible to have 1 slot per executor 
 
 - Parallelization:
   - *Spark || at 2 levels - a) splitting work at executor & core*
@@ -221,7 +224,7 @@
 
 
 
-### **Executor Memory**: [Grishchenko Jan 2016](https://0x0fff.com/spark-memory-management/)
+### **Executor Memory**: [Grishchenko Jan 2016](https://0x0fff.com/spark-memory-management/) `spark.executor.memory` (heap space)
 
 ![Spark Memory](./images/Spark-Memory-Management-1.6.0.png)  
 - Within Java Heap...
@@ -296,7 +299,7 @@
 - can provide these back to driver as the result 
 
 - Shuffle: process of rearranging data within a cluster between stages (triggered by wide operations)
-  - compares data across partitions in order to sort it 
+  - *compares data across partitions in order to sort it*
 - introduces stage boundaries, so wide transformations (by default) create stage boundaries 
   - Example Lineage turned into stages: 
     - Stage 1: "1-read, 2-select, 3-filter, 4A-groupBy, *shuffle-write*"
@@ -349,7 +352,7 @@
   - reoptimizes queries at materialization points 
   - can dynamically re-optimize queries like: switching join strategies, coalesce shuffle partitions
     - only applies to queries with at least one exchange (join, agg, subquery) that are non-streaming 
-
+    - can optimize skew joins if enabled
 
 ![Spark SQL Catalyst Optimizer](./images/SparkExecution_CatalystOptimizerOG.png)
 
@@ -368,14 +371,36 @@
 - Dynamic partition pruning is intended to skip over the data you do not need in the results of a query 
   - does NOT: concatenate columns of similar data types, perform wide transformations, reoptimize physical plans based --and broadcast vars--, reoptimize query plans based on runtime stats collected during execution (AQE does)
 
-- Broadcast variables 
-  - are shared across all worker nodes and cached to avoid having to be serialized with every single task
-  - broadcast vars are small and meant to fit into memory 
+- **Broadcast variables = hash table** + [sparkbyexamples.com](https://sparkbyexamples.com/pyspark/pyspark-broadcast-variables/)
+  - are shared across all worker nodes when first created and cached to avoid having to be serialized with every single task
+  - broadcast vars are small and meant to fit into memory in a serialized format
+    - they are deserialized before executing each task
   - because they are immutable - they are never updated
   - broadcast joins are enabled by default in spark 
 - yield performance benefits if at least one of the two tables is small in size (<= 10 MB by default). Broadcast hash joins can avoid shuffles because instead of exchanging partitions between executors, they broadcast a small table to all executors that then perform the rest of the join operation locally.
+```
+states = {"NY":"New York", "CA":"California", "FL":"Florida"}
+broadcastStates = spark.sparkContext.broadcast(states) # send states to all nodes
+```
 - `spark.sql.autoBroadcastJoinThreshold = 10MB`
 `transactionsDf.join(broadcast(itemsDf), "itemId")`
+
+- **skew data**: data that has class imbalance - where most of the data falls into a single partition 
+- the keys consist of mainly null values which fall onto a single partition
+- subset of values for the keys that makeup the high percentage of total keys which fall onto a single partition 
+  - largest and smallest partition consume different amounts of memory - because largest partition occupies single executor for a long time 
+  - salting can resolve data skew - by using a salted partition key, can repartition data to similar sizes and more uniform distr 
+  - broadcast joins can increase join performance for skewed data over sort-merge joins 
+    - skew joins benefit from broadcast joins when: broadcast data + partition to be merged can fit in memory
+  - spark does not handle null-key records on joins automatically - what will happen is the data is merged and then nulls are dropped 
+    - to mitigate this, must manually code to handle the nulls 
+    - performing a merge with the highly skewed partition can cause OOM - because you bring in a mega-size amount of data for merging that uses space but doesn't get passed to result 
+
+- Accumulator: variables used for agg info through associative and commutative operations - sums and counts, stores data and sends results back to driver when requested 
+  - if an action including an accumulator fails during execution and spark manages to restart the action and complete it successfully, only the successful attempt will be counted in the accumulator
+  - accumulators behave like write-only vars towards the executors and can only be read by the driver - NOT immutable
+  - not all accumulators are listed in spark UI - currently contains named scala accumulators, not the unamed scala ones or pyspark ones
+  - accumulators are instantiated via accumulator(n) of the sparkContext  `counter = spark.sparkContext.accumulator(0)`
 
 # DB Component Concepts
 

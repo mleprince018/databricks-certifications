@@ -16,6 +16,13 @@
     %python
     dbutils.widgets.multiselect("colors", "orange", ["red", "orange", "black", "blue"], "Traffic Sources")
     colors = dbutils.widgets.get("colors").split(",")
+
+budgetDF = spark.sql("""
+  SELECT name, price
+  FROM products
+  WHERE price < 200
+  ORDER BY price DESC
+  """)
 ```
 
 ```
@@ -51,6 +58,7 @@ Pull from parquet file using filter
 - **repartition()** - wide transformation: reshuffles ALL data, *evenly* balances partition sizes
   - returns new DF with exactly N partitions uniformly distributed - used to repartition to MORE partitions or EVEN out by shuffling data
     - if you try and repartiton on a col - it will automatically default to `spark.sql.shuffle.partitions` which = 200 by default. 
+      - to set this to a new value `spark.conf.set("spark.sql.shuffle.partitions", 100)`
 - General rule - when partitioning, # of partitions to = # of cores - or at least a MULTIPLE of the # of cores
   - each partition, when cached is ~ 200 MB is considered optimal based on real-world exp 
 - If i read data in with 10 partitions - do I decrease to 8 partitions? or increase to 16? 
@@ -87,6 +95,12 @@ repartDF.rdd.getNumPartitions()  ==>> returns 8
 .option("path", "/user/mapr/data/flightsbkdc")
 .saveAsTable("flightsbkdc")
 ```
+
+- **Bucketing**
+  - special kind of partitioning 
+  - *partitionBy* will create a folder for each unique col value (one folder for each "src")
+  - *bucketBy* will create 4 *N* bucket files (parquet by default) based on the following vars (in the example "dst" and "carrier")
+
 ### Cache & Loading DF to memory 
 - cache & persist both offer ways to store intermediate df results to be reused in subsequent results 
 - `df.cache() == df.persist(StorageLevel.MEMORY_AND_DISK)` is MEMORY_AND_DISK meaning that partitions that do not fit into memory are stored on disk 
@@ -94,6 +108,7 @@ repartDF.rdd.getNumPartitions()  ==>> returns 8
   - `sampleRDD.cache()` will cache an RDD into memory by default 
   - use `df.unpersist()` to manually remove from memory 
 - `MEMORY_ONLY` – This is the default behavior of the RDD cache() method and stores the RDD or DataFrame as deserialized objects to JVM memory. When there is no enough memory available it will not save DataFrame of some partitions and these will be re-computed as and when required. This takes more memory. but unlike RDD, this would be slower than MEMORY_AND_DISK level as it recomputes the unsaved partitions and recomputing the in-memory columnar representation of the underlying table is expensive
+  - `MEMORY_ONLY_*N*` depending on *N* will spread across that many executors
 - `MEMORY_AND_DISK_2` can duplicate data on multiple nodes - to make data more fault resistant by having copies that can be used immediately should failure occur
 ```
 # Below will fit all partitions it can into memory, and only recompute partitions when needed
@@ -191,12 +206,15 @@ newDF2 = (spark.read
 )
 
 spark.read.schema(fileSchema).format("parquet").load(filePath)
+spark.read.format("binaryFile").option("pathGlobFilter", "*.png").load(path)
+spark.read.format("<FileType>").load(<filePath>)
 ```
 ![spark.read CSV Delimiter, Header & Schema](./images/spark-read_4csv-delim-header-schema.png)
 
 ### **DataFrameWriter**: accessible through df method write
 [SparkByExamples spark.write csv](https://sparkbyexamples.com/spark/spark-write-dataframe-to-csv-file/)
 ```
+df.write.format("<FileType>").save(<filePath>)
     (df.write 
         .option("compression","snappy")
         .mode("overwrite")
@@ -241,6 +259,38 @@ spark.read.schema(fileSchema).format("parquet").load(filePath)
   - different ways to create column calculations
 - To rename columns: `.withColumnRenamed("ExistingColName", "NewColName")`
 
+- creating a dataframe: `createDataFrame(data, schema=None, samplingRatio=None, verifySchema=True)` 
+  - most examples are just an array of tuples that create the "rows"
+```
+spark.createDataFrame([("red",), ("blue",), ("green",)], ["color"]).show()
+spark.createDataFrame([("red",1), ("blue",2), ("green",3)], ["color","age"]).show()
+b= spark.createDataFrame(["DAN","JACK","AND"], "string").toDF("Name")
+b2 = spark.createDataFrame([("DAN",), ("JACK",), ("AND",)], ["Name"])
+========
++-----+   
+|color|
++-----+
+|  red|
+| blue|
+|green|
++-----+
+
++-----+---+
+|color|age|
++-----+---+
+|  red|  1|
+| blue|  2|
+|green|  3|
++-----+---+
++----+
+|Name|
++----+
+| DAN|
+|JACK|
+| AND|
++----+
+```
+
 # Transformations 
 
 ### Transformations & Actions
@@ -250,6 +300,7 @@ spark.read.schema(fileSchema).format("parquet").load(filePath)
 - Actions will execute (show, count, describe, first/head, collect, take...)
 
 - `df.collect()` retrieves all elements in a df as an array of Row type to the driver node yielding the result: 
+  - results in heavy network traffic
 ```
 [Row(dept_name='Finance', dept_id=10), 
 Row(dept_name='Marketing', dept_id=20), 
@@ -269,17 +320,52 @@ deptDF.collect()[0]
   - get(i) is primary in scala 
 - can help sort/subset rows...
   - `newDF = DF.limit(###)` works like obs in SAS - limiting # of rows read in and save to new DF
+- **select()**
   - `purchasesDF.select("event_name","second_col").distinct()` the easiest way to make a unique set of *columns selected* 
     - works like SQL distinct 
-  - `df.dropDuplicates(['col1', 'col2']).select("event_name","second_col")` is equivalent to the distinct above - but it doesn't drop other columns unless you specify 
+    - can also work with an array list: `transactionsDf.select(["predError", "value", "f"])` == `transactionsDf.select("predError", "value", "f")` == `transactionsDf.select(col("predError"), col("value"), col("f"))`
+- **drop()**
+  - `transactionsDf.drop("predError", "value").show()` - drop takes set of column names
+  - takes param list of strings ONLY - these are INVALID: 
+  - **NOTE:** very different from select which is more flexible
+```
+      GOOD  transactionsDf.drop("predError", "value")
+
+      BAD   transactionsDf.drop(col("predError"), col("value"))
+            TypeError: each col in the param list should be a string
+      BAD   transactionsDf.drop(["predError", "value"])
+            TypeError: col should be a string or a Column
+```
+
+- **dropDuplicates() == drop_duplicates**
+  - `df.dropDuplicates(['col1', 'col2']).select("event_name","second_col") == purchasesDF.select("event_name","second_col").distinct()` is equivalent to the distinct above - but it doesn't drop other columns unless you specify 
     - takes an array of col values 
     - with no col name - it will remove duplicate rows from a df
+
+`BAD: df1.dropDuplicates([col("Occupation"),col("Gender")]).show()  ==> ERROR TypeError: Column is not iterable`
+
 - `where | filter` are the same in pySpark 
+- `sort | orderBy` are same in pySpark
 `revenueDF = eventsDF.filter(col("ecommerce.purchase_revenue_in_usd").isNotNull())`
 
 ![Common DataFrame Row Action Methods](./images/DF_RowActionMethods.png)
 
+### Exploration code
+```
+df1.describe("age").show()
++-------+------------------+
+|summary|               age|
++-------+------------------+
+|  count|                 6|
+|   mean|40.666666666666664|
+| stddev| 9.157874571463983|
+|    min|                28|
+|    max|                54|
++-------+------------------+
 
+df1.printSchema()
+df1.count()
+```
 
 ## Aggregation 
 - Groupby / Group Data Methods / Agg F(x)s / Math F(x)s
@@ -297,6 +383,14 @@ deptDF.collect()[0]
   - and you also have to do nesting of function attributes so these dot operators work: look at the sort 
     - you use the column function to house the attribute so you can use the desc option with it inside of the sort AND then apply the limit. VERY convoluted if you ask me. SQL >>>
   - and have to use funky withColumns to remake a col and round it. 
+```
+# approx_count_distinct(col, rsd=None) - rsd: relative stdev = default 0.05 - by setting this to 0 you want exact answer - where documentation recommends you use count_distinct
+Return exact # of distinct values in column "division"
+B. storesDF.agg(approx_count_distinct(col("division"),0).alias("divisionDistinct"))
+C. storesDF.agg(countDistinct(col("division")).alias("divisionDistinct"))
+D. storesDF.select("division").dropDuplicates().count()
+E. storesDF.select("division").distinct().count()
+```
 
 ### Example Code with multi-group by, new columns rounded and sorted with a limit
 ```
@@ -310,7 +404,8 @@ chainDF = (df.groupBy("traffic_source", "device").agg(
       )
       .withColumn("avg_rev", round("avg_rev", 2))
       .withColumn("total_rev", round("total_rev", 2))
-      .sort(col("total_rev").desc())  # automatically puts nulls at the bottom ==  .sort(col("total_rev"), ascending=False)
+      .sort(col("total_rev").desc())  # automatically puts nulls at the bottom 
+          ## .sort(col("total_rev").desc()) ==  .sort(col("total_rev"), ascending=False) == .sort(desc("total_rev"))
       .limit(3)
 )
 # BUT if you sort ascending - nulls automatically go to the top - can use below to put nulls at the bottom - desc_nulls_last also works
@@ -332,7 +427,8 @@ eventsDF.sort(col("user_first_touch_timestamp").desc(), col("event_timestamp"))
 ```
 # Compound conditions
 (col("storeId").between(20, 30)) & (col("productId")==2) 
-# .between() is a valid function that resolves to ((storeId >= 20) AND (storeId <= 30))
+# .between() is a valid function that resolves to ((storeId >= 20) AND (storeId <= 30)) 
+    ## NOTICE THE = signs above - it is INCLUSIVE of the numbers you are trying to be "between"
 # '| &' is how you chain the two booleans - 'and &&' do NOT work
 ```
 
@@ -388,21 +484,27 @@ timestampDF.printSchema()
 #  |-- HMS_dt: integer (nullable = true)
 ```
   ![Example code listing results for Datetime manipulation](./images/ExampleCode_DateTimeManipulation.png)
-
+```
 from pyspark.sql.functions import avg
 activeDowDF = (activeUsersDF
                .withColumn("day", date_format("date", "EEE"))
                .groupBy("day").agg(
                    avg("active_users").alias("avg_users")
                )
-
+```
 ## String & Collection Functions
 ![Common String Functions](./images/DF_StringFunctions.png)
+
+- in pyspark `col("column").contains('<string>')` is meant to see if a certain string exists in a particular column 
+  - for example if ab exists in abs
+- `col("column").isin("Bob","Mike")` is for checking if a list of elements matches a column value
+  - if Bob or Mike exists in the column name for example 
 
 ![Common Collection Functions](./images/DF_CollectionFunctions.png)
 
 ![Common Aggregation Functions](./images/DF_AggregateFunctions.png)
 
+- **explode()**
 ```
  |-- items: array (nullable = true)
  |    |-- element: struct (containsNull = true)
@@ -418,7 +520,7 @@ detailsDF = (df.withColumn("items", explode("items")) # example selected by clas
 ```
 ![Example code listing results for Explode - creates new row for each element in array/map](./images/ExampleCode_ArrayColManipulation.png)
 
-
+- **array_contains()** to filter an array 
 ```
 details = ["Premium", "King", "Mattress"]
 
@@ -460,6 +562,31 @@ email | size    ->  email | size_collectset | size_collectlist
  a@b  | L       ->
  c@d  | (null)  ->
 ```
+- Array Functions: showing how to pull values out of an array
+  - getItems(*N*): starts with 0 being the "first" position and so on
+  - [*N*] can be used to pull out 0 being the first position and so on
+```
+detailsDF0 = (df
+              # .select("items.item_name").distinct()
+             .withColumn("items", explode("items"))
+             .select("items.item_name").distinct()
+              .withColumn("one", split("item_name"," ")[0])
+              .withColumn("one1", split("item_name"," ").getItem(2))
+            )
+detailsDF0.show(truncate=False)
+-------------------------------------
++-----------------------+--------+--------+
+|item_name              |one     |one1    |
++-----------------------+--------+--------+
+|Standard Down Pillow   |Standard|Pillow  |
+|Standard King Mattress |Standard|Mattress|
+|Standard Queen Mattress|Standard|Mattress|
+|Standard Full Mattress |Standard|Mattress|
+|King Down Pillow       |King    |Pillow  |
+|Standard Twin Mattress |Standard|Mattress|
+|Premium Queen Mattress |Premium |Mattress|
+```
+
 ## Other functions
 - **lit()**: creates a column of literal value
 - **isnull()**: returns boolean of true if column is null 
@@ -467,6 +594,9 @@ email | size    ->  email | size_collectset | size_collectlist
 - **dropna()**: omitting rows with any/all or specified # of null values for all/subset of cols 
   - `transactionsDf.dropna(thresh=4)` will ensure that a row has at least 4 non-null values per row and drop all others
   - if you had a 6 col df, and want to remove all missing data with 3 nulls, you want at least 4 valid values, so threshold = 4
+  - `df.dropna() == df.na.drop("any") == df.na.drop()`  [SparkByExamples](https://sparkbyexamples.com/pyspark/pyspark-drop-rows-with-null-values/) | [dropna stackoverflow](https://stackoverflow.com/questions/43296169/cleaning-data-with-dropna-in-pyspark)
+  - to drop rows with null values on ALL columns - `df.na.drop("all")`  (dropna does not have equivalent)
+  - to drop rows with null values on particular columns `df1.na.drop(subset=("Gender","Age")).show() == df1.dropna(subset=["gender","age"]).show()`  
 - **fill()** replace null values with specified value for all/subset of cols 
   - invoked by `.na.fill('value to put in column',"colName")` and can chain together to do 1 col by 1 col
   - OR JSON array `.na.fill({"city-colname1": "unknown", "type-colname2": ""})`
@@ -475,8 +605,19 @@ email | size    ->  email | size_collectset | size_collectlist
 ## in this DB course they TOTALLY skip how to do joins - are you kidding me??? 
 https://sparkbyexamples.com/pyspark/pyspark-join-explained-with-examples/ 
 
+https://www.educba.com/pyspark-union/
+https://sparkbyexamples.com/pyspark/pyspark-union-and-unionall/  
+- union works like SQL union or SAS Append - adding all rows from one df to target DF
+  - can use the .distinct() at the end to drop duplicates
+`disDF = df.union(df2).distinct()` 
 ```
-conversionsDF = (usersDF.join(convertedUsersDF, usersDF.email == convertedUsersDF.email,"outer"))
+# join on multiple IDs/columns - like a conditional 
+dataframe.join(dataframe1, (dataframe.ID1 == dataframe1.ID2)
+               & (dataframe.NAME1 == dataframe1.NAME2)).show()
+OR python list
+storesDF.join(employeesDF, ["storeId", "employeeId"])
+
+conversionsDF = (usersDF.join(convertedUsersDF, usersDF.email == convertedUsersDF.email, "outer"))
     will create 2 columns with identical names - but from different sources:
     root
     |-- user_id: string (nullable = true)
@@ -487,6 +628,9 @@ conversionsDF = (usersDF.join(convertedUsersDF, usersDF.email == convertedUsersD
 
 conversionsDF = (usersDF.join(convertedUsersDF,"email","outer")
     does an automatic coalesce? - seems only way to coalesce otherwise is prior rename of cols
+
+## Crossjoins are cartesian merge 
+storesDF.crossJoin(employeesDF)
 
 ### Broadcast join - where you use broadcast(df) to send the smaller DF to all executors to be merged with the larger dataset 
 from pyspark.sql.functions import broadcast
@@ -504,6 +648,11 @@ df.filter(df.state != "OH") == df.filter(~(df.state == "OH")) == df.filter(col("
 # THIS DOES NOT WORK: df.filter("device" != 'macOS') - because it expects the entire thing to be a SQL string query 
 ```
 
+- **Broadcast Join** 
+  - to set default 10MB value to something else - need to modify the `spark.sql.autoBroadcastJoinThreshold` parameter by providing *bytes* - NOT MB
+    - use `spark.conf.set("spark.sql.autoBroadcastJoinThreshold", 10485760)` to set to 10 MB
+    - adjusting conf settings get evaluated right away
+
 ## User Defined Functions (UDFs)
 - custom transformation functions applied to spark dataframes
 - CONS of UDF tldr; it's slow
@@ -513,7 +662,19 @@ df.filter(df.state != "OH") == df.filter(~(df.state == "OH")) == df.filter(col("
   - overhead from python interpreter & on executors running the UDF
 - pandas/vectorized UDFs use apache arrow to speed up exec - in test envnm - run about the same
 !!! review how to register UDFs - syntax and usage !!!
+- UDF returns a string by default - so if you are NOT returning a string (and returning a boolean for example) you need to declare it:
+
+### Other UDF Examples
 ```
+from pyspark.sql.functions import col
+
+from pyspark.sql import types as T
+evaluateTestSuccessUDF = udf(evaluateTestSuccess, T.BooleanType())  
+result = transactionsDf.withColumn("result", evaluateTestSuccessUDF(col("storeId")))
+
+result.show()
+result.dtypes
+
 def firstLetterFunction(email):  # defining function
   return email[0]
 firstLetterUDF = udf(firstLetterFunction)  # serializes f(x) to be sent to executors so it can now be used on dataframes
@@ -522,6 +683,8 @@ display(salesDF.select(firstLetterUDF(col("email")))) # applied to col
 
 # to use in SQL - need to use this registration
 spark.udf.register("sql_udf", firstLetterFunction)
+spark.udf.register("<Name of UDF>", <python function>)  ~ withColumn
+
 spark.udf.register('power_5_udf', pow_5, T.LongType())
 %sql
 SELECT sql_udf(email) AS firstLetter FROM sales 
@@ -541,7 +704,7 @@ itemsDf.withColumn("most_frequent_letter", find_most_freq_letter_udf("itemName")
 - Note that typically, we would have to specify a return type for udf(). Except in this case, since the default return type for udf() is a string which is what we are expecting here. If we wanted to return an integer variable instead, we would have to register the Python function as UDF using find_most_freq_letter_udf = udf(find_most_freq_letter, IntegerType()).
 
 ### Sample
-
+`transactionsDf.sample(withReplacement=False, fraction=0.15).select(avg('predError'))`
 Answering this question correctly depends on whether you understand the arguments to the DataFrame.sample() method (link to the documentation below). The arguments are as follows: `DataFrame.sample(withReplacement=None, fraction=None, seed=None)`.
 
 The first argument withReplacement specified whether a row can be drawn from the DataFrame multiple times. By default, this option is disabled in Spark. But we have to enable it here, since the question asks for a row being able to appear more than once. So, we need to pass True for this argument.
@@ -552,7 +715,10 @@ The second argument to the withReplacement method is fraction. This referes to t
 
 The last argument is a random seed. A random seed makes a randomized processed repeatable. This means that if you would re-run the same sample() operation with the same random seed, you would get the same rows returned from the sample() command. There is no behavior around the random seed specified in the question. The varying random seeds are only there to confuse you!
 
-- in pyspark `col("column").contains('<string>')` is meant to see if a certain string exists in a particular column 
-  - for example if ab exists in abs
-- `col("column").isin("Bob","Mike")` is for checking if a list of elements matches a column value
-  - if Bob or Mike exists in the column name for example 
+Tricky stuff: 
+```
+df1.first()
+Row(id=1, Name='Peter', Height=1.79, Age=28, Gender='M', Occupation='Tiler')
+df1.first().Name  # Name is case sensitive - some kind of hack to pull a value out of returned row? 
+'Peter'
+```
