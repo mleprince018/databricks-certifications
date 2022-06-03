@@ -113,9 +113,19 @@
 - **Executors** JVM processes that: accept tasks from the driver, execute those tasks and return results to the driver 
 - Use **slots** (interchangeable with CPU cores or threads) for running tasks in parallel 
 
+### Deployment Modes
+- Valid deployment modes are standalone, Apache YARN, Apache Mesos and Kubernetes
+  - Deployment modes often refer to ways that Spark can be deployed in cluster mode and how it uses specific frameworks outside Spark.
+- **standalone deployment** means no other apps on the cluster except Spark
+   - Standalone mode uses only a single executor per worker per application.
+
+### Execution Modes
 - *Execution Modes* - Tying Logical Components to Physical Arch - where the driver/executors are physically located
   - in cluster/client the cluster manager is SEPARATE machine from client/driver
-
+- There are only 3 valid execution modes in Spark: Client, cluster, and local execution modes. Execution modes do not refer to specific frameworks, but to where infrastructure is located with respect to each other.
+  - In client mode, the driver sits on a machine outside the cluster. 
+  - In cluster mode, the driver sits on a machine inside the cluster. 
+  - Finally, in local mode, all Spark infrastructure is started in a single JVM (Java Virtual Machine) in a single computer which then also includes the driver.
 ![Spark Logical Components in Cluster Mode ](./images/Spark_runtimeArch_01.png) 
 - Cluster Mode (this is DB config - since DB driver schedules tasks across executors)
   - User submits pre-compiled JAR, Py script or R script to cluster manager
@@ -160,7 +170,7 @@
     3. Maintains state & tasks of executors 
       - must be network accessible from worker nodes
 - **Spark Cluster Manager** spark execution is agnostic to cluster manager - can use any of available cluster managers, doesn't change behavior - so long as cluster manager can provide executor processes and they communicate - spark doesn't care
-  - (B2) Spark Driver will ask Cluster for worker nodes/executors  
+  - (B2) Spark Driver (through SparkContext) will ask Cluster for worker nodes/executors  
   - Spark relies on cluster manager to 
     1. (D) *SCHEDULE & LAUNCH* executors (applies to both client & cluster mode) upon the START of the spark application
     2. (D) Cluster Manager allocates resources for execution of tasks 
@@ -231,6 +241,7 @@
   - **Reserved Memory** - memory reserved by spark system to store spark's internal objects, and its size is hard coded
     - Total Java Heap should be > 1.5 x Reserved Memory (default=300MB)
   - **Spark Memory** 
+    - Used for storing data & executing queries on data - thus execution and storage memory
     - set as `spark.memory.fraction = .75` which defaults to .75 and has a size of: `(JavaHeap - ReservedMemory)*spark.memory.fraction`
     - Spark's memory usage is broken up into 2 items: Execution or Storage divided by `spark.memory.storageFraction = 0.5` which defaults to 0.5
     1. Storage Memory - defaults `MEMORY_AND_DISK`
@@ -300,6 +311,9 @@
 
 - Shuffle: process of rearranging data within a cluster between stages (triggered by wide operations)
   - *compares data across partitions in order to sort it*
+
+- during (C) of execution - job is broken up into stages and it needs to be planned:
+  - Example Lineage: 1-read, 2-select, 3-filter, 4-groupBy, 5-filter, 6-write
 - introduces stage boundaries, so wide transformations (by default) create stage boundaries 
   - Example Lineage turned into stages: 
     - Stage 1: "1-read, 2-select, 3-filter, 4A-groupBy, *shuffle-write*"
@@ -310,8 +324,6 @@
     - Stage 1: "1-read, 2-select, 3-filter, 4A-groupBy, shuffle-write, shuffle-read, 4B-groupBy"
     - Stage 2: "**cache-read**, 5-filter, 6-write" 
 
-- during (C) of execution - job is broken up into stages and it needs to be planned:
-  - Example Lineage: 1-read, 2-select, 3-filter, 4-groupBy, 5-filter, 6-write
   - **Narrow transformations/dependencies** (select, filter, cast, coalesce, map, union, joins when inputs are co-partitioned): when data required to compute records in a single partition that exist in at least one partition of the parent RDD - 
   - **Wide transformations/dependencies** ( distinct, groupBy, sort, repartitioning, join w/ inputs not co-partitioned): come from many partitions of the parent RDD
   - Marc's definition: when a function execution occurs on an input partition (parent RDD), the partition results (child RDD) can be pieces/subsets of the input partition (parent RDD) **narrow** OR pieces/subsets of MULTIPLE partitions **wide** 
@@ -333,8 +345,8 @@
 ??? Computational Query ==> Execution Plan ???
 ![Spark Query Optimizer](./images/SparkExecution_CatalystOptimizer.png)
 - When you submit a query to Spark it goes through various stages before it is executed
-  - doesn't matter whether query from SQL, scala or python - if you go through the API it goes through this
-  1. Unresolved Logical Plan: Query is parsed - tablenames, etc are not resolved 
+  - doesn't matter whether query from SQL, scala or python - if you go through the API it goes through this query optimization
+  1. Unresolved Logical Plan: Query is parsed - tablenames, etc are not resolved (syntax check)
   2. Analysis through Metadata Catalog: tablenames, columns, data types, functions, databases... are validated against catalog 
       - "catalog" refers to metadata catalog 
   3. Logical plan: Valid query 
@@ -349,7 +361,8 @@
 
 - **Adaptive Query Execution (AQE)** in Spark 3.0+
   - *disabled by default* recommended to enable - provides runtime stats plugged into logical plan 
-  - reoptimizes queries at materialization points 
+  - operates at runtime based on actions by reoptimizing queries at materialization points 
+    - transformations do NOT trigger AQE, actions do
   - can dynamically re-optimize queries like: switching join strategies, coalesce shuffle partitions
     - only applies to queries with at least one exchange (join, agg, subquery) that are non-streaming 
     - can optimize skew joins if enabled
@@ -373,7 +386,7 @@
 
 - **Broadcast variables = hash table** + [sparkbyexamples.com](https://sparkbyexamples.com/pyspark/pyspark-broadcast-variables/)
   - are shared across all worker nodes when first created and cached to avoid having to be serialized with every single task
-  - broadcast vars are small and meant to fit into memory in a serialized format
+  - broadcast vars are small and meant to fit into memory in a serialized format  
     - they are deserialized before executing each task
   - because they are immutable - they are never updated
   - broadcast joins are enabled by default in spark 
@@ -398,7 +411,7 @@ broadcastStates = spark.sparkContext.broadcast(states) # send states to all node
 
 - Accumulator: variables used for agg info through associative and commutative operations - sums and counts, stores data and sends results back to driver when requested 
   - if an action including an accumulator fails during execution and spark manages to restart the action and complete it successfully, only the successful attempt will be counted in the accumulator
-  - accumulators behave like write-only vars towards the executors and can only be read by the driver - NOT immutable
+  - accumulators behave like write-only vars towards the executors and can ***only** be read by the driver* - NOT immutable (ephemeral)
   - not all accumulators are listed in spark UI - currently contains named scala accumulators, not the unamed scala ones or pyspark ones
   - accumulators are instantiated via accumulator(n) of the sparkContext  `counter = spark.sparkContext.accumulator(0)`
 

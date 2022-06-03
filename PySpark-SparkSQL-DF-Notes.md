@@ -1,5 +1,5 @@
 # Spark SQL & DataFrames
-??? check distinct() - can it contain stuff in it? or just dot operator? 
+
 ### DBUTILS
 - %fs is a dbutils shortcut to the dbutils.fs function
 - Widgets are like a STP parameter you define and can edit the value and reference throughout the notebook 
@@ -95,7 +95,8 @@ repartDF.rdd.getNumPartitions()  ==>> returns 8
 .option("path", "/user/mapr/data/flightsbkdc")
 .saveAsTable("flightsbkdc")
 ```
-
+??? include images for repartition + partitionBy vs partitionBy 
+??? partitionBy + bucketBy vs bucketBy
 - **Bucketing**
   - special kind of partitioning 
   - *partitionBy* will create a folder for each unique col value (one folder for each "src")
@@ -110,6 +111,7 @@ repartDF.rdd.getNumPartitions()  ==>> returns 8
 - `MEMORY_ONLY` – This is the default behavior of the RDD cache() method and stores the RDD or DataFrame as deserialized objects to JVM memory. When there is no enough memory available it will not save DataFrame of some partitions and these will be re-computed as and when required. This takes more memory. but unlike RDD, this would be slower than MEMORY_AND_DISK level as it recomputes the unsaved partitions and recomputing the in-memory columnar representation of the underlying table is expensive
   - `MEMORY_ONLY_*N*` depending on *N* will spread across that many executors
 - `MEMORY_AND_DISK_2` can duplicate data on multiple nodes - to make data more fault resistant by having copies that can be used immediately should failure occur
+- `DISK_ONLY` will cache data only on disk and not cache it in memory
 ```
 # Below will fit all partitions it can into memory, and only recompute partitions when needed
 from pyspark import StorageLevel
@@ -237,6 +239,11 @@ df.write.format("<FileType>").save(<filePath>)
       .write.option("sep", "\t")
       .option("nullValue", "n/a")
       .csv(csvPath)
+
+transactionsDf.write
+    .format("parquet")
+    .option("mode", "append")
+    .save(path)       # can use save to write the output to a path
 ```
 - **Saving Mode Types**
   - overwrite – mode is used to overwrite the existing file.
@@ -260,7 +267,8 @@ df.write.format("<FileType>").save(<filePath>)
 - To rename columns: `.withColumnRenamed("ExistingColName", "NewColName")`
 
 - creating a dataframe: `createDataFrame(data, schema=None, samplingRatio=None, verifySchema=True)` 
-  - most examples are just an array of tuples that create the "rows"
+  - most examples are just an array/pythonlist of tuples that create the "rows"
+  - b is a dataframe created from a python list, then you specify the schema type
 ```
 spark.createDataFrame([("red",), ("blue",), ("green",)], ["color"]).show()
 spark.createDataFrame([("red",1), ("blue",2), ("green",3)], ["color","age"]).show()
@@ -307,15 +315,18 @@ Row(dept_name='Marketing', dept_id=20),
 Row(dept_name='Sales', dept_id=30), 
 
 # Returns value of First Row, First Column which is "Finance"
-deptDF.collect()[0][0]
+deptDF.collect()[0][0]  == deptDF.first()
 # returns the first element in an array (1st row)
-deptDF.collect()[0]
+deptDF.collect()[0]    == deptDF.first().dept_name
 ```
 - Usually, collect() is used to retrieve the action output when you have very small result set and calling collect() on an RDD/DataFrame with a bigger result set causes out of memory as it returns the entire dataset (from all workers) to the driver hence we should avoid calling collect() on a larger dataset.
 
 - `take(n: Int) == head(n: Int)` Take the first num elements of the RDD.
 
 ### Rows 
+
+- `DataFrame.distinct()` - does not contain anything inside of distinct - meant to apply to dataframes - not to columns or anything like that
+
 - Methods to work with rows - length, get value of a particular position, field index...
   - get(i) is primary in scala 
 - can help sort/subset rows...
@@ -365,6 +376,19 @@ df1.describe("age").show()
 
 df1.printSchema()
 df1.count()
+df1.summary().show()
++-------+------------------+-------------------+---------------------+-------------------+-----------------------+------------------+
+|summary|          order_id|              email|transaction_timestamp|total_item_quantity|purchase_revenue_in_usd|      unique_items|
++-------+------------------+-------------------+---------------------+-------------------+-----------------------+------------------+
+|  count|            235911|             235911|               235911|             235911|                 235911|            235911|
+|   mean|362550.35025920795|               null| 1.593087467760907...| 1.2590934716905953|      1099.501362378258|1.2319518801581952|
+| stddev|60726.474043218506|               null| 4.600778729454835E11| 0.5162298714632738|      550.5914449061642|0.4773074957501888|
+|    min|            257433|aacosta@hotmail.com|     1592181560601984|                  1|                   53.1|                 1|
+|    25%|            309947|               null|     1592694002058318|                  1|                  850.5|                 1|
+|    50%|            362495|               null|     1593088619193768|                  1|                 1045.0|                 1|
+|    75%|            415129|               null|     1593480430200268|                  1|                 1195.0|                 1|
+|    max|            467802|  zzuniga@quinn.com|     1593879294724110|                  5|                 5830.0|                 5|
++-------+------------------+-------------------+---------------------+-------------------+-----------------------+------------------+
 ```
 
 ## Aggregation 
@@ -469,6 +493,8 @@ timestampDF = (df
         .withColumn("date_timestring", date_format("date_type", "HH:mm:ss.SSSSSS")) # returns a string of zeros: '00:00:00.000000'
         .withColumn("HMS_dt", hour(col("date_type")))  # returns 0 because date_type lacks specificity for these values 
               )
+              ### add from unix_timestamp or from unix - can it read from integers
+              ### dayofyear can it read from integer or timestamp or date type?
 timestampDF.display()
 timestampDF.printSchema()
 
@@ -566,25 +592,27 @@ email | size    ->  email | size_collectset | size_collectlist
   - getItems(*N*): starts with 0 being the "first" position and so on
   - [*N*] can be used to pull out 0 being the first position and so on
 ```
+from pyspark.sql.functions import *
+
 detailsDF0 = (df
               # .select("items.item_name").distinct()
              .withColumn("items", explode("items"))
              .select("items.item_name").distinct()
-              .withColumn("one", split("item_name"," ")[0])
-              .withColumn("one1", split("item_name"," ").getItem(2))
-            )
+              .withColumn("one", split(col("item_name")," ")[0])
+              .withColumn("two", element_at(split("item_name", " "),2))  
+              .withColumn("three", split("item_name"," ").getItem(2))
+        )
 detailsDF0.show(truncate=False)
 -------------------------------------
-+-----------------------+--------+--------+
-|item_name              |one     |one1    |
-+-----------------------+--------+--------+
-|Standard Down Pillow   |Standard|Pillow  |
-|Standard King Mattress |Standard|Mattress|
-|Standard Queen Mattress|Standard|Mattress|
-|Standard Full Mattress |Standard|Mattress|
-|King Down Pillow       |King    |Pillow  |
-|Standard Twin Mattress |Standard|Mattress|
-|Premium Queen Mattress |Premium |Mattress|
++-----------------------+--------+-----+--------+
+|item_name              |one     |two  |three   |
++-----------------------+--------+-----+--------+
+|Standard Down Pillow   |Standard|Down |Pillow  |
+|Standard King Mattress |Standard|King |Mattress|
+|Standard Queen Mattress|Standard|Queen|Mattress|
+|Standard Full Mattress |Standard|Full |Mattress|
+|King Down Pillow       |King    |Down |Pillow  |
+|Standard Twin Mattress |Standard|Twin |Mattress|
 ```
 
 ## Other functions
@@ -610,6 +638,15 @@ https://sparkbyexamples.com/pyspark/pyspark-union-and-unionall/
 - union works like SQL union or SAS Append - adding all rows from one df to target DF
   - can use the .distinct() at the end to drop duplicates
 `disDF = df.union(df2).distinct()` 
+creates a new 6-column DataFrame by appending the rows of the 6-column DataFrame yesterdayTransactionsDf to the rows of the 6-column DataFrame todayTransactionsDf, ignoring that both DataFrames have different column names?
+`todayTransactionsDf.union(yesterdayTransactionsDf)`
+Correct. The union command appends rows of yesterdayTransactionsDf to the rows of todayTransactionsDf, ignoring that both DataFrames have different column names. The resulting DataFrame will have the column names of DataFrame todayTransactionsDf.
+
+todayTransactionsDf.unionByName(yesterdayTransactionsDf): 
+No. unionByName specifically tries to match columns in the two DataFrames by name and only appends values in columns with identical names across the two DataFrames. In the form presented above, the command is a great fit for joining DataFrames that have exactly the same columns, but in a different order. In this case though, the command will fail because the two DataFrames have different columns.
+
+The union()  matches columns independent of their names, just by their order. The unionByName() one matches columns by their name (which is asked for in the question). It also has a useful optional argument, allowMissingColumns. This allows you to merge DataFrames that have different columns - and assign null values to non-existent cols in another df
+
 ```
 # join on multiple IDs/columns - like a conditional 
 dataframe.join(dataframe1, (dataframe.ID1 == dataframe1.ID2)
@@ -643,7 +680,7 @@ Filters also don't make much sense:
 abandonedCartsDF = (emailCartsDF.filter(col("converted") == 'False')
                     .filter(col("cart").isNotNull())   )
 ===
-abandonedCartsDF2 = (emailCartsDF.filter( "converted = 'False' and cart IS NOT NULL" ) )
+abandonedCartsDF2 = (emailCartsDF.filter( "converted = 'False' and cart IS NOT NULL" ) )  ### put SQL where clause by using ""
 df.filter(df.state != "OH") == df.filter(~(df.state == "OH")) == df.filter(col("state") != "OH")
 # THIS DOES NOT WORK: df.filter("device" != 'macOS') - because it expects the entire thing to be a SQL string query 
 ```
@@ -694,8 +731,6 @@ from pyspark.sql.functions import pandas_udf
 vectorizedUDF = pandas_udf(lambda s: s.str[0], "string")  
 display(salesDF.select(vectorizedUDF(col("email"))))
 
-```
-```
 find_most_freq_letter_udf = udf(find_most_freq_letter)
 itemsDf.withColumn("most_frequent_letter", find_most_freq_letter_udf("itemName"))
 ```
