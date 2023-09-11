@@ -76,7 +76,7 @@ Pull from parquet file using filter
   - Best # of partitions changes based on data, the query, etc... so its best if program does it for us
   - can set large # of partitions at the beginning, then let query optimize and group into larger, more uniform partitions
 
-```
+```py
 groupdf.rdd.getNumPartitions() = returns # of partitions
 coalesceDF = groupdf.coalesce(6)
 repartDF = groupdf.repartition(8)  ## can repratition to lower number of partitions, will reshuffle to create equal sized partitions
