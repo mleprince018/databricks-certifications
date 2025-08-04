@@ -117,6 +117,8 @@ repartDF.rdd.getNumPartitions()  ==>> returns 8
 from pyspark import StorageLevel
 transactionsDF.persist(StorageLevel.MEMORY_ONLY)  
 ```
+Optimizing for performance
+https://overcast.blog/optimizing-databricks-autoscaler-51d8a236f7a5 
 
 ## SparkSession 
 ![Spark SQL vs DataFrame API](./images/SparkSQLvsDataFrameAPI.png)
@@ -334,7 +336,7 @@ deptDF.collect()[0]    == deptDF.first().dept_name
 - **select()**
   - `purchasesDF.select("event_name","second_col").distinct()` the easiest way to make a unique set of *columns selected* 
     - works like SQL distinct 
-    - can also work with an array list: `transactionsDf.select(["predError", "value", "f"])` == `transactionsDf.select("predError", "value", "f")` == `transactionsDf.select(col("predError"), col("value"), col("f"))`
+    - can also work with an array list: `transactionsDf.select(["predError", "value", "f"])` == `transactionsDf.select("predError", "value", "f")` == `transactionsDf.select(col("predError"), col("value"), col("f"))` == `transactionsDf['Field1', 'Field2']`
 - **drop()**
   - `transactionsDf.drop("predError", "value").show()` - drop takes set of column names
   - takes param list of strings ONLY - these are INVALID: 
@@ -546,7 +548,7 @@ detailsDF = (df.withColumn("items", explode("items")) # example selected by clas
 ```
 ![Example code listing results for Explode - creates new row for each element in array/map](./images/ExampleCode_ArrayColManipulation.png)
 
-- **array_contains()** to filter an array 
+- **array_contains()** to filter an array **split()** (similar to sas scan)
 ```
 details = ["Premium", "King", "Mattress"]
 
@@ -573,7 +575,7 @@ df4.select(split(df4.str, '[AB]',2).alias('str')).show()
   ('Jen','Mary','Brown','1980-02-17')
   df1 = df.withColumn('year', split(df['dob'], '-').getItem(0)) \
        .withColumn('month', split(df['dob'], '-').getItem(1)) \
-       .withColumn('day', split(df['dob'], '-').getItem(2))
+       .withColumn('day', split(df['dob'], '-')[2])  # Equivalent to .getItem(2) - retrieves array value
 
 ### Use groupBy AND agg(collect_set(...)) to group string values into arrays for each unique row
     # collect_set will de-dup and present unique set - whereas collect_list will collect all elements
@@ -630,7 +632,8 @@ detailsDF0.show(truncate=False)
   - OR JSON array `.na.fill({"city-colname1": "unknown", "type-colname2": ""})`
 - **replace()**: returns new df replacing a value with another value
 
-## in this DB course they TOTALLY skip how to do joins - are you kidding me??? 
+# Joins, Unions
+**in this DB course they TOTALLY skip how to do joins - are you kidding me???**
 https://sparkbyexamples.com/pyspark/pyspark-join-explained-with-examples/ 
 
 https://www.educba.com/pyspark-union/
@@ -689,6 +692,30 @@ df.filter(df.state != "OH") == df.filter(~(df.state == "OH")) == df.filter(col("
   - to set default 10MB value to something else - need to modify the `spark.sql.autoBroadcastJoinThreshold` parameter by providing *bytes* - NOT MB
     - use `spark.conf.set("spark.sql.autoBroadcastJoinThreshold", 10485760)` to set to 10 MB
     - adjusting conf settings get evaluated right away
+
+# Other - UDFs, Windows, tricks
+
+## Window Function
+- Think of the Window like a slider over a particular column - it allows you to work on a particular column and perform analysis, ranking or aggregations on that slider of data 
+- https://www.youtube.com/watch?v=e-EL-6Vnkbg
+- partitionBy: sets the grouping - so if you want to work on the entire dataset, leave it blank
+  - if you want to work on a grouping, like every User or every Scenario, you partition by that column. Can do multiple - such as by scenario & region
+- OrderBy: sets the order of the data for your operations - when you lag ordering by date_dt, you make sure that the oldest date gets shifted "down" or lagged
+  - this allows for a 1980-06 value to be shifted to a row with date 1981-01, so that when processing 1981-01, you have a 1980-06 value. 
+- Rows/range/RangeBetween: specify start & end points of a window frame by rows above/below 
+  - DEFAULT VALUE: start of window to current row  
+  - rows - fixed number of rows that precede (above)/follow (below) the current row 
+    - (requires an OrderBy statement, because how do you specify what "precedes" or "follows")
+    - cannot handle ranking 
+```sql
+OVER ( ORDER BY date 
+      ROWS -- specifies you are doing a window of rows & not across partition
+      BETWEEN -- between specified bounds
+        3 PRECEDING -- # preceding
+        AND CURRENT ROW ) -- 'current row' is a special term 
+```
+    -  ==> ROWS specifies rows
+  - range - specified range of values with respect to value of current row 
 
 ## User Defined Functions (UDFs)
 - custom transformation functions applied to spark dataframes
